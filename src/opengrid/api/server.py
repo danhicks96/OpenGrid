@@ -126,6 +126,16 @@ async def lifespan(app: FastAPI):
     kv_store = KVCacheStore(max_ram_gb=cfg.resources.max_ram_gb)
     shard_mgr = ShardManager(cfg.shards_dir, cfg.resources.max_disk_gb)
     worker = Worker(profile.node_id, shard_mgr, backend, kv_store)
+
+    # Auto-load model if OPENGRID_MODEL_PATH is set (from --model CLI flag)
+    model_path = os.environ.get("OPENGRID_MODEL_PATH", "")
+    if model_path:
+        try:
+            worker.load_model(model_path)
+            log.info("Model loaded from CLI: %s", model_path)
+        except Exception as e:
+            log.warning("Failed to load model %s: %s", model_path, e)
+
     worker_server = WorkerServer(worker, host="0.0.0.0", port=cfg.network.listen_port)
     await worker_server.start()
     app.state.worker_server = worker_server

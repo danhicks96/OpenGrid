@@ -19,16 +19,18 @@ log = logging.getLogger(__name__)
 PROOF_BYTES_PER_32_TOKENS = 258  # per TOPLOC paper
 
 
-def _stub_proof(activations: bytes, top_k: int = 16) -> bytes:
+def _stub_proof(activations: bytes | str, top_k: int = 16) -> bytes:
     """
     Placeholder: SHA-256 hash of the top-k bytes of activations.
     Replace with real TOPLOC polynomial encoding when the library is available.
     """
+    if isinstance(activations, str):
+        activations = activations.encode("utf-8")
     h = hashlib.sha256(activations[:top_k * 4]).digest()
     return h[:PROOF_BYTES_PER_32_TOKENS // 2]  # truncate to realistic size
 
 
-def generate_proof(activations: bytes, token_count: int = 32) -> str:
+def generate_proof(activations: bytes | str, token_count: int = 32) -> str:
     """
     Generate a TOPLOC proof for a block of activations.
     Returns base64-encoded proof string.
@@ -42,7 +44,7 @@ def generate_proof(activations: bytes, token_count: int = 32) -> str:
     return base64.b64encode(proof_bytes).decode()
 
 
-def verify_proof(activations: bytes, proof_b64: str, token_count: int = 32) -> bool:
+def verify_proof(activations: bytes | str, proof_b64: str, token_count: int = 32) -> bool:
     """
     Verify a TOPLOC proof against activations.
     Returns True if valid, False if tampered.
