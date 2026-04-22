@@ -1,0 +1,100 @@
+# OpenGrid — docker compose for a local all-in-one dev/test setup
+# Runs: orchestrator (coordinator + local model) + one CPU worker + one GPU worker
+#
+# Quick start:
+#   docker compose up                          # CPU only
+#   docker compose --profile gpu up            # include GPU worker
+#
+# Environment variables (copy .env.example to .env and fill in):
+#   OPENGRID_API_KEY   — Bearer token for the API  (default: dev-key-change-me)
+#   OPENGRID_HOME      — host path for shared state (default: ./data)
+
+version: "3.9"
+
+x-opengrid-base: &opengrid-base
+  restart: unless-stopped
+  environment:
+    OPENGRID_API_KEY: ${OPENGRID_API_KEY:-dev-key-change-me}
+    OPENGRID_HOME: /root/.opengrid
+  volumes:
+    - opengrid-data:/root/.opengrid
+
+services:
+
+  # ── Orchestrator ────────────────────────────────────────────────────────────
+  # Runs the local micro model + coordinator + public-facing API.
+  # This is the only container that needs to be reachable by the user.
+  orchestrator:
+    <<: *opengrid-base
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.orchestrator
+    container_name: opengrid-orchestrator
+    ports:
+      - "8080:8080"   # User-facing OpenAI-compatible API
+      - "7700:7700"   # Coordinator RPC (internal, exposed for multi-host setups)
+    networks:
+      - opengrid-net
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── CPU Worker ──────────────────────────────────────────────────────────────
+  # Light/mid-tier worker using llama.cpp.  Good for small models and BitNet.
+  worker-cpu:
+    <<: *opengrid-base
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.cpu
+    container_name: opengrid-worker-cpu
+    ports:
+      - "7601:7600"   # DHT/gossip port (remapped to avoid clash with orchestrator)
+    networks:
+      - opengrid-net
+    environment:
+      OPENGRID_API_KEY: ${OPENGRID_API_KEY:-dev-key-change-me}
+      OPENGRID_HOME: /root/.opengrid
+      OPENGRID_BOOTSTRAP_PEERS: "orchestrator:7600"
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+
+  # ── GPU Worker ──────────────────────────────────────────────────────────────
+  # Mid/heavy/power-tier worker using vLLM.
+  # Only starts when --profile gpu is passed.
+  worker-gpu:
+    <<: *opengrid-base
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.gpu
+    container_name: opengrid-worker-gpu
+    profiles: ["gpu"]
+    ports:
+      - "7602:7600"
+    networks:
+      - opengrid-net
+    environment:
+      OPENGRID_API_KEY: ${OPENGRID_API_KEY:-dev-key-change-me}
+      OPENGRID_HOME: /root/.opengrid
+      OPENGRID_BOOTSTRAP_PEERS: "orchestrator:7600"
+      VLLM_GPU_MEMORY_UTILIZATION: ${VLLM_GPU_MEMORY_UTILIZATION:-0.85}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+
+volumes:
+  opengrid-data:
+    driver: local
+
+networks:
+  opengrid-net:
+    driver: bridge

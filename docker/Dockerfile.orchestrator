@@ -1,0 +1,31 @@
+# OpenGrid — Local orchestrator node
+# Runs the micro orchestrator model (BitNet 2B) + coordinator stack
+# No GPU required — this is the "brain" that farms work out to GPU nodes
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake git curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml .
+COPY src/ src/
+
+# CPU inference for the local orchestrator model + all coordinator deps
+RUN CMAKE_ARGS="-DLLAMA_NATIVE=on" pip install --no-cache-dir \
+    llama-cpp-python
+RUN pip install --no-cache-dir -e ".[cpu,memory,p2p]"
+
+VOLUME ["/root/.opengrid"]
+
+# API port exposed to the user's machine
+EXPOSE 8080
+# DHT/gossip port
+EXPOSE 7600
+
+ENV OPENGRID_HOME=/root/.opengrid
+ENV OPENGRID_MODE=orchestrator
+
+ENTRYPOINT ["opengrid"]
+CMD ["serve", "--orchestrator"]
