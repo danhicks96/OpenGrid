@@ -1,0 +1,32 @@
+# OpenGrid — GPU worker node (vLLM / CUDA)
+# Suitable for: mid, heavy, and power-tier nodes with NVIDIA GPU
+# Requires: NVIDIA Container Toolkit on the host
+#   https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-dev python3-pip \
+    build-essential cmake git curl \
+    && ln -sf python3.11 /usr/bin/python3 \
+    && ln -sf python3 /usr/bin/python \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml .
+COPY src/ src/
+
+# Install core + GPU inference deps
+RUN pip install --no-cache-dir -e ".[gpu,memory,p2p]"
+
+VOLUME ["/root/.opengrid"]
+
+# Worker port, coordinator/DHT port
+EXPOSE 7600 8080
+
+ENV OPENGRID_HOME=/root/.opengrid
+# GPU memory fraction — overridable at runtime via env
+ENV VLLM_GPU_MEMORY_UTILIZATION=0.85
+
+ENTRYPOINT ["opengrid"]
+CMD ["serve"]

@@ -1,0 +1,27 @@
+# OpenGrid — CPU worker node (llama.cpp / BitNet)
+# Suitable for: light and mid-tier nodes with no discrete GPU
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake git curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml .
+COPY src/ src/
+
+# Install core + CPU inference deps
+RUN pip install --no-cache-dir -e ".[cpu,memory,p2p]"
+
+# llama-cpp-python with CPU optimisations
+RUN CMAKE_ARGS="-DLLAMA_NATIVE=on" pip install --no-cache-dir llama-cpp-python
+
+VOLUME ["/root/.opengrid"]
+
+EXPOSE 7600 8080
+
+ENV OPENGRID_HOME=/root/.opengrid
+
+ENTRYPOINT ["opengrid"]
+CMD ["serve"]
