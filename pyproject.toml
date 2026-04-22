@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=65.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "opengrid"
+version = "0.0.1"
+description = "Distributed peer‑to‑peer LLM inference network"
+authors = []
+requires-python = ">=3.11"
+dependencies = [  # placeholder
+]
+dynamic = ["classifiers", "entry-points"]
+
+[project.optional-dependencies]
+dev = ["flake8", "mypy", "coverage", "pytest"]
+
+[project.urls]
+Documentation = "https://github.com/andromaliusai/OpenGrid/"
+Source = "https://github.com/andromaliusai/OpenGrid/"
+Issues = "https://github.com/andromaliusai/OpenGrid/issues"
