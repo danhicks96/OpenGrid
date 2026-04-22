@@ -36,12 +36,21 @@ class WorkPollResponse(BaseModel):
 
 
 class WorkResultSubmission(BaseModel):
+    model_config = {"extra": "allow"}
     job_id: str
-    node_id: str
-    output_text: str
+    node_id: str = ""
+    output_text: str = ""
+    # Accept alternate field names from different worker implementations
+    output: str = ""
+    text: str = ""
+    result: str = ""
     tokens_generated: int = 0
     latency_ms: float = 0.0
     error: str = ""
+
+    def get_output(self) -> str:
+        """Return output text from whichever field was populated."""
+        return self.output_text or self.output or self.text or self.result or ""
 
 
 # Simple in-memory work queue
@@ -100,15 +109,18 @@ async def submit_result(result: WorkResultSubmission, request: Request):
     if event:
         event.set()
 
+    # Normalize output text
+    result.output_text = result.get_output()
+
     # Credit the worker
     ledger = request.app.state.ledger
     if ledger and not result.error:
         ledger.record_earned(
             job_id=result.job_id,
-            node_id=result.node_id,
+            node_id=result.node_id or "remote",
             model_id="remote",
             shard_range=(0, 0),
-            tokens=result.tokens_generated,
+            tokens=result.tokens_generated or len(result.output_text.split()),
         )
 
     return {"status": "accepted", "job_id": result.job_id}
