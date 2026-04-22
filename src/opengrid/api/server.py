@@ -136,7 +136,8 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             log.warning("Failed to load model %s: %s", model_path, e)
 
-    worker_server = WorkerServer(worker, host="0.0.0.0", port=cfg.network.listen_port)
+    worker_port = cfg.network.listen_port + 10  # 7610: WebSocket worker (7600 is DHT)
+    worker_server = WorkerServer(worker, host="0.0.0.0", port=worker_port)
     await worker_server.start()
     app.state.worker_server = worker_server
 
@@ -173,7 +174,7 @@ async def lifespan(app: FastAPI):
         "OpenGrid ready — port %d | node %s | tier %s | mode %s | "
         "worker ws://0.0.0.0:%d | gossip :%d | models: %s",
         cfg.network.api_port, profile.node_id, profile.tier, mode,
-        cfg.network.listen_port, cfg.network.listen_port + 1,
+        cfg.network.listen_port, cfg.network.listen_port + 1, worker_port,
         ", ".join(app.state.model_registry.list_models()) or "(none loaded)",
     )
 
