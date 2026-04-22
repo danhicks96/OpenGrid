@@ -156,3 +156,66 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
         }],
         "usage": usage,
     }
+
+
+@router.post("/v1/chat/completions/local", dependencies=[Depends(verify_api_key)])
+async def chat_completions_local(req: ChatCompletionRequest, request: Request):
+    """
+    Direct local inference — bypasses the scheduler/DAG entirely.
+    Sends the prompt straight to the local worker backend.
+    For single-node testing and development.
+    """
+    await require_positive_balance(request)
+
+    worker_server = request.app.state.worker_server
+    worker = worker_server._worker
+    ledger = request.app.state.ledger
+
+    if not worker._backend.is_loaded():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="No model loaded. Start with --model flag.",
+        )
+
+    prompt = "\n".join(f"{m.role}: {m.content}" for m in req.messages)
+
+    if req.stream:
+        async def _stream():
+            for token in worker._backend.generate_stream(
+                prompt, max_tokens=req.max_tokens, temperature=req.temperature
+            ):
+                yield _sse_chunk(token)
+            yield _sse_chunk("", finish_reason="stop")
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(_stream(), media_type="text/event-stream")
+
+    output = worker._backend.generate(
+        prompt, max_tokens=req.max_tokens, temperature=req.temperature
+    )
+    prompt_tokens = sum(len(m.content.split()) for m in req.messages)
+    completion_tokens = len(output.split())
+
+    if ledger:
+        ledger.record_spent(
+            job_id=str(uuid.uuid4()),
+            node_id="local",
+            model_id=req.model,
+            tokens=prompt_tokens + completion_tokens,
+        )
+
+    return {
+        "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": req.model,
+        "choices": [{
+            "message": {"role": "assistant", "content": output},
+            "finish_reason": "stop",
+            "index": 0,
+        }],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
+    }
