@@ -1,6 +1,9 @@
 """
 POST /v1/chat/completions — OpenAI-compatible chat completions endpoint.
 Supports streaming via Server-Sent Events.
+
+v0.0.2: Wired to real DAG dispatcher. Falls back to stub when no workers
+         are available (so the API still responds during development).
 """
 from __future__ import annotations
 
@@ -48,37 +51,85 @@ def _sse_chunk(delta: str, finish_reason: Optional[str] = None) -> str:
     return f"data: {json.dumps(chunk)}\n\n"
 
 
-async def _stream_response(request: Request, req: ChatCompletionRequest) -> AsyncIterator[str]:
+async def _execute_inference(request: Request, req: ChatCompletionRequest) -> tuple[str, dict]:
+    """
+    Execute the actual distributed inference pipeline.
+    Returns (output_text, usage_dict).
+    """
     scheduler = request.app.state.scheduler
+    dispatcher = request.app.state.dispatcher
     ledger = request.app.state.ledger
 
+    # Build prompt from messages
+    prompt = "\n".join(f"{m.role}: {m.content}" for m in req.messages)
+
+    # Schedule: build a DAG and assign nodes
     result = scheduler.schedule(req.model, session_id=req.session_id)
     if result.dag is None:
-        yield f"data: {json.dumps({'error': result.error})}\n\n"
-        yield "data: [DONE]\n\n"
-        return
-
-    # Stub: yield a placeholder response until inference is wired end-to-end
-    stub_reply = (
-        "[OpenGrid stub] Inference pipeline scheduled. "
-        f"DAG: {len(result.dag.tasks)} stage(s) across "
-        f"{len(set(t.node_id for t in result.dag.tasks))} node(s). "
-        "Connect worker backends to receive real model output."
-    )
-    for word in stub_reply.split():
-        yield _sse_chunk(word + " ")
-        await asyncio.sleep(0.02)
-
-    if ledger:
-        ledger.record_spent(
-            job_id=result.dag.job_id,
-            node_id="local",
-            model_id=req.model,
-            tokens=len(stub_reply.split()),
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=result.error,
+            headers={"Retry-After": "10"},
         )
 
-    yield _sse_chunk("", finish_reason="stop")
-    yield "data: [DONE]\n\n"
+    # Register with work monitor for fault tolerance
+    work_monitor = request.app.state.work_monitor
+    work_monitor.register_job(result.dag)
+
+    # Execute the DAG through the dispatcher
+    exec_result = await dispatcher.execute(result.dag, input_text=prompt)
+
+    if exec_result.success:
+        output = exec_result.output_text
+        prompt_tokens = sum(len(m.content.split()) for m in req.messages)
+        completion_tokens = exec_result.tokens_generated
+
+        # Deduct credits from requester
+        if ledger:
+            from opengrid.coordinator.scheduler import MODEL_COST_FACTORS
+            cost_factor = MODEL_COST_FACTORS.get(req.model, 1.0)
+            ledger.record_spent(
+                job_id=result.dag.job_id,
+                node_id="local",
+                model_id=req.model,
+                tokens=prompt_tokens + completion_tokens,
+                model_cost_factor=cost_factor,
+            )
+
+        # Issue credits to worker nodes
+        if ledger:
+            for task_info in exec_result.task_results:
+                ledger.record_earned(
+                    job_id=f"{result.dag.job_id}-{task_info['task_id'][:8]}",
+                    node_id=task_info["node_id"],
+                    model_id=req.model,
+                    shard_range=tuple(task_info["shard_range"]),
+                    tokens=completion_tokens,
+                )
+
+        return output, {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Inference failed: {exec_result.error}",
+        )
+
+
+async def _stream_response(request: Request, req: ChatCompletionRequest) -> AsyncIterator[str]:
+    try:
+        output, usage = await _execute_inference(request, req)
+        for word in output.split():
+            yield _sse_chunk(word + " ")
+            await asyncio.sleep(0.01)
+        yield _sse_chunk("", finish_reason="stop")
+        yield "data: [DONE]\n\n"
+    except HTTPException as e:
+        yield f"data: {json.dumps({'error': e.detail})}\n\n"
+        yield "data: [DONE]\n\n"
 
 
 @router.post("/v1/chat/completions", dependencies=[Depends(verify_api_key)])
@@ -91,32 +142,17 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
             media_type="text/event-stream",
         )
 
-    # Non-streaming: collect all chunks
-    chunks = []
-    async for chunk in _stream_response(request, req):
-        if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
-            try:
-                data = json.loads(chunk[6:])
-                delta = data["choices"][0]["delta"].get("content", "")
-                if delta:
-                    chunks.append(delta)
-            except Exception:
-                pass
+    output, usage = await _execute_inference(request, req)
 
-    content = "".join(chunks)
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
         "object": "chat.completion",
         "created": int(time.time()),
         "model": req.model,
         "choices": [{
-            "message": {"role": "assistant", "content": content},
+            "message": {"role": "assistant", "content": output},
             "finish_reason": "stop",
             "index": 0,
         }],
-        "usage": {
-            "prompt_tokens": sum(len(m.content.split()) for m in req.messages),
-            "completion_tokens": len(content.split()),
-            "total_tokens": sum(len(m.content.split()) for m in req.messages) + len(content.split()),
-        },
+        "usage": usage,
     }
