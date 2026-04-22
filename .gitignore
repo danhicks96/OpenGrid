@@ -51,3 +51,7 @@ logs/
 htmlcov/
 .coverage
 .tox
+# Python venv
+.venv/
+*.pyc
+__pycache__/
