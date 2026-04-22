@@ -144,10 +144,23 @@ class GossipNode:
     ) -> None:
         remote = writer.get_extra_info("peername")
         try:
-            data = await asyncio.wait_for(reader.readline(), timeout=5.0)
+            # Read all available data (handles messages with or without newlines)
+            chunks = []
+            try:
+                while True:
+                    chunk = await asyncio.wait_for(reader.read(MAX_GOSSIP_MSG_SIZE), timeout=2.0)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    if b"\n" in chunk or len(b"".join(chunks)) > MAX_GOSSIP_MSG_SIZE:
+                        break
+            except asyncio.TimeoutError:
+                pass
+            
+            data = b"".join(chunks)
             if not data:
                 return
-            line = data.decode().strip()
+            line = data.decode(errors="replace").strip()
 
             peer_ip = remote[0] if remote else "unknown"
             count = self._msg_counts.get(peer_ip, 0)
@@ -156,15 +169,22 @@ class GossipNode:
                 return
             self._msg_counts[peer_ip] = count + 1
 
+            # Accept both "GOSSIP {...}" and raw "{...}" formats
             if line.startswith("GOSSIP "):
                 raw = line[7:]
-                self.receive(raw, peer_host=peer_ip, peer_port=remote[1] if remote else 0)
-        except asyncio.TimeoutError:
-            pass
+            elif line.startswith("{"):
+                raw = line
+            else:
+                log.debug("Unknown gossip format from %s: %s", peer_ip, line[:80])
+                return
+            self.receive(raw, peer_host=peer_ip, peer_port=remote[1] if remote else 0)
         except Exception as e:
             log.debug("Gossip receive error from %s: %s", remote, e)
         finally:
-            writer.close()
+            try:
+                writer.close()
+            except Exception:
+                pass
 
     # ── Sender ────────────────────────────────────────────────────────────
 
@@ -227,7 +247,21 @@ class GossipNode:
             log.warning("Gossip message too large (%d bytes), dropping", len(raw))
             return
         try:
-            data = json.loads(raw)
+            # Try to parse as-is first
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                # Attempt to repair truncated JSON — close any open brackets/braces
+                repaired = raw.rstrip()
+                if not repaired.endswith("}"):
+                    # Truncated mid-value: find last complete key-value pair
+                    last_comma = repaired.rfind(",")
+                    if last_comma > 0:
+                        repaired = repaired[:last_comma] + "}"
+                    else:
+                        repaired = repaired + "}"
+                data = json.loads(repaired)
+                log.debug("Repaired truncated gossip from %s", peer_host)
             if not _validate_health(data):
                 log.warning("Gossip validation failed from %s: absurd values", peer_host)
                 return
