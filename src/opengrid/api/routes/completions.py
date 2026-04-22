@@ -261,3 +261,31 @@ async def chat_completions_distributed(req: ChatCompletionRequest, request: Requ
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Worker error: {result.error if result else 'result missing'}",
         )
+
+    output = result.output_text or result.output or result.text or result.result or ""
+    ledger = request.app.state.ledger
+    prompt_tokens = sum(len(m.content.split()) for m in req.messages)
+    completion_tokens = len(output.split())
+
+    if ledger:
+        ledger.record_spent(
+            job_id=job_id, node_id="local", model_id=req.model,
+            tokens=prompt_tokens + completion_tokens,
+        )
+
+    return {
+        "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": req.model,
+        "choices": [{
+            "message": {"role": "assistant", "content": output},
+            "finish_reason": "stop",
+            "index": 0,
+        }],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
+    }

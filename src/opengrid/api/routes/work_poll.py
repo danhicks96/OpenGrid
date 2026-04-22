@@ -12,6 +12,9 @@ POST /v1/work/result                    — submit completed result
 from __future__ import annotations
 
 import asyncio
+import logging
+
+log = logging.getLogger(__name__)
 import base64
 import json
 import time
@@ -101,6 +104,8 @@ async def poll_work(node_id: str, request: Request):
 
 @router.post("/v1/work/result", dependencies=[Depends(verify_api_key)])
 async def submit_result(result: WorkResultSubmission, request: Request):
+    import logging as _log
+    _log.getLogger("opengrid.work").warning("RESULT FIELDS: job_id=%r node_id=%r output_text=%r output=%r text=%r result_f=%r extra=%r", result.job_id, result.node_id, result.output_text, result.output, result.text, result.result, result.model_extra)
     """
     Worker submits completed inference result.
     """
@@ -109,6 +114,7 @@ async def submit_result(result: WorkResultSubmission, request: Request):
     if event:
         event.set()
 
+    log.info("Work result received: job=%s node=%s output_text=%r output=%r text=%r result=%r", result.job_id, result.node_id, result.output_text, result.output, result.text, result.result)
     # Normalize output text
     result.output_text = result.get_output()
 
@@ -124,3 +130,12 @@ async def submit_result(result: WorkResultSubmission, request: Request):
         )
 
     return {"status": "accepted", "job_id": result.job_id}
+
+
+@router.post("/v1/work/result/debug")
+async def debug_result(request: Request):
+    """Debug: show raw request body."""
+    body = await request.body()
+    import logging
+    logging.getLogger("opengrid.debug").info("RAW RESULT BODY: %s", body.decode()[:500])
+    return {"raw": body.decode()[:500]}
