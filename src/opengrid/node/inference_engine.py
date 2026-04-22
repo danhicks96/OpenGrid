@@ -86,7 +86,26 @@ class LlamaCppBackend(InferenceBackend):
         self._model = None
         self._model_path = ""
 
+    @staticmethod
+    def _ensure_dll_paths() -> None:
+        """On Windows, add nvidia/llama_cpp DLL dirs to the search path."""
+        if os.name != "nt":
+            return
+        import site
+        for sp in site.getsitepackages():
+            for subdir in [
+                os.path.join(sp, "nvidia", "cuda_runtime", "bin"),
+                os.path.join(sp, "nvidia", "cublas", "bin"),
+                os.path.join(sp, "llama_cpp", "lib"),
+            ]:
+                if os.path.isdir(subdir):
+                    try:
+                        os.add_dll_directory(subdir)
+                    except OSError:
+                        pass
+
     def load_model(self, model_path: str) -> None:
+        self._ensure_dll_paths()
         try:
             from llama_cpp import Llama  # type: ignore
         except ImportError:
@@ -272,8 +291,10 @@ class MLXBackend(InferenceBackend):
         self._tokenizer = None
 
 
-def select_backend(gpu_vram_gb: float = 0.0, platform: str = "") -> InferenceBackend:
+def select_backend(gpu_vram_gb: float = 0.0, platform: str = "", model_path: str = "") -> InferenceBackend:
     """Pick the best available backend for the current hardware."""
+    is_gguf = model_path.lower().endswith(".gguf")
+
     # Apple Silicon
     if "darwin" in platform.lower() or "apple" in platform.lower():
         try:
@@ -283,8 +304,8 @@ def select_backend(gpu_vram_gb: float = 0.0, platform: str = "") -> InferenceBac
         except ImportError:
             pass
 
-    # NVIDIA GPU with enough VRAM
-    if gpu_vram_gb >= 6.0:
+    # NVIDIA GPU with enough VRAM — vLLM can't handle GGUF, force llama.cpp for those
+    if gpu_vram_gb >= 6.0 and not is_gguf:
         try:
             import vllm  # type: ignore  # noqa: F401
             log.info("Selected vLLM backend (%.1f GB VRAM)", gpu_vram_gb)

@@ -122,7 +122,8 @@ async def lifespan(app: FastAPI):
     from opengrid.node.server import WorkerServer
     from opengrid.daemon.shard_manager import ShardManager
 
-    backend = select_backend(gpu_vram_gb=profile.gpu_vram_free_gb, platform=profile.platform)
+    _model_path_hint = os.environ.get("OPENGRID_MODEL_PATH", "")
+    backend = select_backend(gpu_vram_gb=profile.gpu_vram_free_gb, platform=profile.platform, model_path=_model_path_hint)
     kv_store = KVCacheStore(max_ram_gb=cfg.resources.max_ram_gb)
     shard_mgr = ShardManager(cfg.shards_dir, cfg.resources.max_disk_gb)
     worker = Worker(profile.node_id, shard_mgr, backend, kv_store)

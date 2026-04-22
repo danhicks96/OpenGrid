@@ -163,9 +163,9 @@ async def chat_completions_local(req: ChatCompletionRequest, request: Request):
     """
     Direct local inference — bypasses the scheduler/DAG entirely.
     Sends the prompt straight to the local worker backend.
-    For single-node testing and development.
+    For single-node testing, development, and worker-assigned jobs.
+    No credits required — this node is the compute provider.
     """
-    await require_positive_balance(request)
 
     worker_server = request.app.state.worker_server
     worker = worker_server._worker
