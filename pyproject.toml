@@ -4,18 +4,58 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opengrid"
-version = "0.0.1"
-description = "Distributed peer‑to‑peer LLM inference network"
-authors = []
+version = "0.0.1a0"
+description = "Distributed peer-to-peer LLM inference network"
+authors = [{name = "Andromalius AI", email = "hello@andromalius.ai"}]
 requires-python = ">=3.11"
-dependencies = [  # placeholder
+readme = "README.md"
+license = {text = "MIT OR Apache-2.0"}
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "pydantic>=2.7.0",
+    "tomli>=2.0.1; python_version < '3.11'",
+    "psutil>=5.9.0",
+    "aiohttp>=3.9.0",
 ]
-dynamic = ["classifiers", "entry-points"]
 
 [project.optional-dependencies]
-dev = ["flake8", "mypy", "coverage", "pytest"]
+gpu = [
+    "vllm>=0.4.0",
+    "autoawq>=0.2.0",
+    "bitsandbytes>=0.43.0",
+]
+cpu = [
+    "llama-cpp-python>=0.2.80",
+]
+apple = [
+    "mlx-lm>=0.12.0",
+]
+memory = [
+    "lancedb>=0.6.0",
+]
+p2p = [
+    "kademlia>=2.2.2",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23.0",
+    "httpx>=0.27.0",
+    "flake8>=7.0",
+    "mypy>=1.10.0",
+    "coverage>=7.5",
+]
+all = [
+    "opengrid[gpu,cpu,apple,memory,p2p]",
+]
+
+[project.scripts]
+opengrid = "opengrid.__main__:main"
 
 [project.urls]
 Documentation = "https://github.com/andromaliusai/OpenGrid/"
 Source = "https://github.com/andromaliusai/OpenGrid/"
 Issues = "https://github.com/andromaliusai/OpenGrid/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
