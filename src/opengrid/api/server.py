@@ -20,7 +20,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from opengrid.api.routes import completions, credits, models
+from opengrid.api.routes import completions, credits, models, work_poll
 from opengrid.coordinator.admission import AdmissionController
 from opengrid.coordinator.kv_router import KVRouter
 from opengrid.coordinator.scheduler import Scheduler
@@ -201,6 +201,7 @@ app = FastAPI(
 app.include_router(completions.router)
 app.include_router(models.router)
 app.include_router(credits.router)
+app.include_router(work_poll.router)
 
 
 @app.get("/health")

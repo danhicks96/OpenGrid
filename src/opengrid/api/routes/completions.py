@@ -219,3 +219,45 @@ async def chat_completions_local(req: ChatCompletionRequest, request: Request):
             "total_tokens": prompt_tokens + completion_tokens,
         },
     }
+
+
+@router.post("/v1/chat/completions/distributed", dependencies=[Depends(verify_api_key)])
+async def chat_completions_distributed(req: ChatCompletionRequest, request: Request):
+    """
+    Distributed inference via work queue — sends the job to a remote
+    worker node that polls for work. Works through NAT because the
+    worker initiates the connection, not the coordinator.
+
+    Flow:
+    1. User hits this endpoint
+    2. Job queued in work_poll queue
+    3. Remote worker polls GET /v1/work/poll, grabs the job
+    4. Worker runs inference locally on their GPU
+    5. Worker POSTs result to /v1/work/result
+    6. This endpoint returns the result to the user
+    """
+    await require_positive_balance(request)
+
+    from opengrid.api.routes.work_poll import enqueue_job, get_result
+
+    prompt = "\n".join(f"{m.role}: {m.content}" for m in req.messages)
+    job_id = str(uuid.uuid4())
+
+    # Queue the job and get an event to wait on
+    event = enqueue_job(job_id, req.model, prompt, req.max_tokens, req.temperature)
+
+    # Wait for a worker to pick it up and return the result (timeout 120s)
+    try:
+        await asyncio.wait_for(event.wait(), timeout=120.0)
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="No worker picked up the job within 120 seconds. Is a worker node running and polling?",
+        )
+
+    result = get_result(job_id)
+    if result is None or result.error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Worker error: {result.error if result else 'result missing'}",
+        )
